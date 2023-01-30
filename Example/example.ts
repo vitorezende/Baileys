@@ -1,17 +1,25 @@
 import { Boom } from '@hapi/boom'
-import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, isJidBroadcast, makeCacheableSignalKeyStore, useMultiFileAuthState } from '../src'
+import makeWASocket, { AnyMessageContent, delay, DisconnectReason, fetchLatestBaileysVersion, isJidBroadcast, makeCacheableSignalKeyStore, makeInMemoryStore, MessageRetryMap, useMultiFileAuthState } from '../src'
 import MAIN_LOGGER from '../src/Utils/logger'
-import * as dotenv from 'dotenv'
-import { Configuration, OpenAIApi } from "openai"
 
 const logger = MAIN_LOGGER.child({ })
 logger.level = 'trace'
-dotenv.config()
 
-const iaCommands = {
-	davinci3: "/ia",
-	dalle: "/img"
-}
+const useStore = !process.argv.includes('--no-store')
+const doReplies = !process.argv.includes('--no-reply')
+
+// external map to store retry counts of messages when decryption/encryption fails
+// keep this out of the socket itself, so as to prevent a message decryption/encryption loop across socket restarts
+const msgRetryCounterMap: MessageRetryMap = { }
+
+// the store maintains the data of the WA connection in memory
+// can be written out to a file & read from it
+const store = useStore ? makeInMemoryStore({ logger }) : undefined
+store?.readFromFile('./baileys_store_multi.json')
+// save every 10s
+setInterval(() => {
+	store?.writeToFile('./baileys_store_multi.json')
+}, 10_000)
 
 // start a connection
 const startSock = async() => {
@@ -29,37 +37,28 @@ const startSock = async() => {
 			/** caching makes the store faster to send/recv messages */
 			keys: makeCacheableSignalKeyStore(state.keys, logger),
 		},
+		msgRetryCounterMap,
 		generateHighQualityLinkPreview: true,
 		// ignore all broadcast messages -- to receive the same
 		// comment the line below out
 		shouldIgnoreJid: jid => isJidBroadcast(jid),
 		// implement to handle retries
 		getMessage: async key => {
+			if(store) {
+				const msg = await store.loadMessage(key.remoteJid!, key.id!)
+				return msg?.message || undefined
+			}
+
 			// only if store is present
 			return {
 				conversation: 'hello'
 			}
-		},
-		patchMessageBeforeSending: (message) => {
-			const requirePatch = !!(message.buttonsMessage || message.listMessage || message.templateMessage);
-			if (requirePatch) {
-				message = {
-					viewOnceMessageV2: {
-						message: {
-							messageContextInfo: {
-								deviceListMetadataVersion: 2,
-								deviceListMetadata: {},
-							},
-							...message,
-						},
-					},
-				};
-			}
-			return message;
 		}
 	})
 
-	const sendMessageWTyping = async(msg, jid) => {
+	store?.bind(sock.ev)
+
+	const sendMessageWTyping = async(msg: AnyMessageContent, jid: string) => {
 		await sock.presenceSubscribe(jid)
 		await delay(500)
 
@@ -69,45 +68,6 @@ const startSock = async() => {
 		await sock.sendPresenceUpdate('paused', jid)
 
 		await sock.sendMessage(jid, msg)
-	}
-	const configuration = new Configuration({
-		organization: process.env.ORGANIZATION_ID,
-		apiKey: process.env.OPENAI_KEY,
-	});
-	
-	const openai = new OpenAIApi(configuration);
-
-	const getDavinciResponse = async (clientText) => {
-		const options = {
-			model: "text-davinci-003", // Modelo GPT a ser usado
-			prompt: clientText, // Texto enviado pelo usuário
-			temperature: 1, // Nível de variação das respostas geradas, 1 é o máximo
-			max_tokens: 4000 // Quantidade de tokens (palavras) a serem retornadas pelo bot, 4000 é o máximo
-		}
-	
-		try {
-			const response = await openai.createCompletion(options)
-			let botResponse = ""
-			response.data.choices.forEach(({ text }) => {
-				botResponse += text
-			})
-			return `🤖\n ${botResponse.trim()}`
-		} catch (e) {
-			return `❌ OpenAI Response Error: ${e.response.data.error.message}`
-		}
-	}
-
-	const getDalleResponse = async (clientText) => {
-		try {
-			const response = await openai.createImage({
-				prompt: clientText, // Descrição da imagem
-				n: 1, // Número de imagens a serem geradas
-				size: "1024x1024", // Tamanho da imagem
-			});
-			return response.data.data[0].url
-		} catch (e) {
-			return `❌ OpenAI Response Error: ${e.response.data.error.message}`
-		}
 	}
 
 	// the process function lets you process all events that just occurred
@@ -149,51 +109,15 @@ const startSock = async() => {
 
 			// received a new message
 			if(events['messages.upsert']) {
-				const upsertMessage = events['messages.upsert']
-				console.log('recv messages ', JSON.stringify(upsertMessage, undefined, 2))
+				const upsert = events['messages.upsert']
+				console.log('recv messages ', JSON.stringify(upsert, undefined, 2))
 
-				if(upsertMessage.type === 'notify') {
-					for(const msg of upsertMessage.messages) {
-						const jid = msg.key.remoteJid;
-
-						if(!msg.key.fromMe && jid !== 'status@bardcast') {
+				if(upsert.type === 'notify') {
+					for(const msg of upsert.messages) {
+						if(!msg.key.fromMe && doReplies) {
 							console.log('replying to', msg.key.remoteJid)
 							await sock!.readMessages([msg.key])
-							const msgToChatGpt = msg.message?.conversation;
-
-							let firstWord = msgToChatGpt?.substring(0, msgToChatGpt.indexOf(" "));
-
-							switch (firstWord) {
-								case iaCommands.davinci3:
-									const question = msgToChatGpt?.substring(msgToChatGpt.indexOf(" "));
-									getDavinciResponse(question).then((response) => {
-										/*
-										 * Faremos uma validação no message.from
-										 * para caso a gente envie um comando
-										 * a response não seja enviada para
-										 * nosso próprio número e sim para 
-										 * a pessoa ou grupo para o qual eu enviei
-										 */
-										sendMessageWTyping({ text: response }, jid!);
-									})
-									break;
-						
-								case iaCommands.dalle:
-									const imgDescription = msgToChatGpt?.substring(msgToChatGpt.indexOf(" "));
-									getDalleResponse(imgDescription).then((imgUrl?: string) => {
-										const imgPayload = {
-											caption: imgDescription,
-											image: {
-												url: imgUrl
-											}
-										}
-										sendMessageWTyping(imgPayload, msg.key.remoteJid)
-											.then(result => console.log('RESULT: ', result))
-											.catch(err => console.log('ERROR: ', err))
-
-									})
-									break;
-							}
+							await sendMessageWTyping({ text: 'Hello there!' }, msg.key.remoteJid!)
 						}
 					}
 				}
