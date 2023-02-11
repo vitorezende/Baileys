@@ -137,15 +137,15 @@ const startSock = async() => {
 				await saveCreds()
 			}
 
-			if(events.call) {
-				console.log('recv call event', events.call)
-			}
+			// if(events.call) {
+			// 	console.log('recv call event', events.call)
+			// }
 
-			// history received
-			if(events['messaging-history.set']) {
-				const { chats, contacts, messages, isLatest } = events['messaging-history.set']
-				console.log(`recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest})`)
-			}
+			// // history received
+			// if(events['messaging-history.set']) {
+			// 	const { chats, contacts, messages, isLatest } = events['messaging-history.set']
+			// 	console.log(`recv ${chats.length} chats, ${contacts.length} contacts, ${messages.length} msgs (is latest: ${isLatest})`)
+			// }
 
 			// received a new message
 			if(events['messages.upsert']) {
@@ -199,43 +199,43 @@ const startSock = async() => {
 				}
 			}
 
-			// messages updated like status delivered, message deleted etc.
-			if(events['messages.update']) {
-				console.log(events['messages.update'])
-			}
+			// // messages updated like status delivered, message deleted etc.
+			// if(events['messages.update']) {
+			// 	console.log(events['messages.update'])
+			// }
 
-			if(events['message-receipt.update']) {
-				console.log(events['message-receipt.update'])
-			}
+			// if(events['message-receipt.update']) {
+			// 	console.log(events['message-receipt.update'])
+			// }
 
-			if(events['messages.reaction']) {
-				console.log(events['messages.reaction'])
-			}
+			// if(events['messages.reaction']) {
+			// 	console.log(events['messages.reaction'])
+			// }
 
-			if(events['presence.update']) {
-				console.log(events['presence.update'])
-			}
+			// if(events['presence.update']) {
+			// 	console.log(events['presence.update'])
+			// }
 
-			if(events['chats.update']) {
-				console.log(events['chats.update'])
-			}
+			// if(events['chats.update']) {
+			// 	console.log(events['chats.update'])
+			// }
 
-			if(events['contacts.update']) {
-				for(const contact of events['contacts.update']) {
-					if(typeof contact.imgUrl !== 'undefined') {
-						const newUrl = contact.imgUrl === null
-							? null
-							: await sock!.profilePictureUrl(contact.id!).catch(() => null)
-						console.log(
-							`contact ${contact.id} has a new profile pic: ${newUrl}`,
-						)
-					}
-				}
-			}
+			// if(events['contacts.update']) {
+			// 	for(const contact of events['contacts.update']) {
+			// 		if(typeof contact.imgUrl !== 'undefined') {
+			// 			const newUrl = contact.imgUrl === null
+			// 				? null
+			// 				: await sock!.profilePictureUrl(contact.id!).catch(() => null)
+			// 			console.log(
+			// 				`contact ${contact.id} has a new profile pic: ${newUrl}`,
+			// 			)
+			// 		}
+			// 	}
+			// }
 
-			if(events['chats.delete']) {
-				console.log('chats deleted ', events['chats.delete'])
-			}
+			// if(events['chats.delete']) {
+			// 	console.log('chats deleted ', events['chats.delete'])
+			// }
 		}
 	)
 
